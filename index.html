@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="할일먼저">
+<meta name="theme-color" content="#1f6feb">
+<title>할일먼저 — 회의 할 일</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-512.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>할일먼저</h1>
+  <p class="sub">회의 녹음 → 할 일부터 → 텔레그램 봇으로</p>
+</header>
+
+<main>
+  <section class="card">
+    <div class="row">
+      <input id="title" placeholder="회의 이름 (예: 주간 회의)" autocomplete="off">
+      <input id="date" type="date">
+    </div>
+
+    <div class="rec">
+      <button id="recBtn" class="big">🎙 듣기 시작</button>
+      <span id="recTime" class="muted">00:00</span>
+    </div>
+    <p id="recHint" class="hint"></p>
+
+    <label for="text" class="lbl">회의 내용 (말한 내용이 여기 쌓여요. 직접 고쳐도 돼요)</label>
+    <textarea id="text" rows="8" placeholder="여기에 회의 내용을 받아쓰거나 붙여 넣으세요."></textarea>
+    <p id="interim" class="interim"></p>
+
+    <div class="actions">
+      <button id="analyzeBtn" class="primary">✅ 할 일 뽑기</button>
+      <button id="sampleBtn" class="ghost">예시 넣기</button>
+      <button id="clearBtn" class="ghost">지우기</button>
+    </div>
+  </section>
+
+  <section id="result" class="card hidden">
+    <h2>할 일 <span id="todoCount" class="pill">0</span></h2>
+    <ul id="todos" class="items"></ul>
+    <button class="add ghost" data-list="todos">+ 할 일 추가</button>
+
+    <h2>결정 <span id="decCount" class="pill gray">0</span></h2>
+    <ul id="decisions" class="items"></ul>
+    <button class="add ghost" data-list="decisions">+ 결정 추가</button>
+
+    <h2>막힌 점 <span id="blkCount" class="pill red">0</span></h2>
+    <ul id="blockers" class="items"></ul>
+    <button class="add ghost" data-list="blockers">+ 막힌 점 추가</button>
+
+    <label class="check"><input type="checkbox" id="withText"> 회의 내용 전체도 같이 보내기</label>
+
+    <div class="actions">
+      <button id="sendBtn" class="primary tg">✈️ 텔레그램 봇에게 보내기</button>
+      <button id="copyBtn" class="ghost">복사</button>
+    </div>
+    <details>
+      <summary>보낼 글 미리 보기</summary>
+      <pre id="preview"></pre>
+    </details>
+  </section>
+
+  <section class="card">
+    <details>
+      <summary>설정</summary>
+      <label class="lbl" for="botName">텔레그램 봇 아이디 (예: gapju_bot, @ 빼고)</label>
+      <input id="botName" placeholder="봇 아이디" autocomplete="off" autocapitalize="off">
+      <label class="lbl" for="request">봇에게 붙일 부탁 한 줄</label>
+      <textarea id="request" rows="3"></textarea>
+      <p class="hint">공유 창이 안 뜨면: 글을 복사한 뒤 봇 대화방을 열어 드려요. 붙여넣기만 하면 됩니다.</p>
+    </details>
+    <details>
+      <summary>지난 회의 <span id="histCount" class="muted"></span></summary>
+      <ul id="history" class="history"></ul>
+    </details>
+    <p class="hint">회의 내용과 기록은 이 아이폰 안(사파리 저장소)에만 둡니다. 할 일 뽑기는 인터넷 없이 기기 안(Rust)에서 합니다.
+      다만 🎙 음성 인식은 애플 서버를 거칠 수 있으니, 학교 개인정보가 오가는 회의는 녹음하지 마세요.</p>
+  </section>
+</main>
+
+<div id="toast" class="toast hidden"></div>
+<script src="app.js"></script>
+</body>
+</html>

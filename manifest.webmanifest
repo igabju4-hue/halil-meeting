@@ -1,0 +1,15 @@
+{
+  "name": "할일먼저 — 회의 할 일",
+  "short_name": "할일먼저",
+  "description": "회의를 받아쓰고 할 일부터 뽑아 텔레그램 봇으로 보낸다",
+  "lang": "ko",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f6fa",
+  "theme_color": "#1f6feb",
+  "icons": [
+    { "src": "icon-180.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
