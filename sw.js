@@ -1,5 +1,5 @@
 // 오프라인에서도 열리게 앱 파일을 저장해 둔다. 고치면 VERSION을 올린다.
-const VERSION = 'hm-v1';
+const VERSION = 'hm-v2';
 const FILES = ['./', 'index.html', 'style.css', 'app.js', 'core.wasm', 'manifest.webmanifest', 'icon-180.png', 'icon-512.png'];
 
 self.addEventListener('install', (e) => {

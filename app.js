@@ -2,8 +2,138 @@
 'use strict';
 
 const $ = (id) => document.getElementById(id);
-const DEFAULT_REQUEST = '부탁: 이 회의 할 일을 확인하고, 담당·기한이 빠진 일과 오늘 먼저 할 일을 짚어 줘.';
-const LS = { draft: 'hm.draft', hist: 'hm.history', bot: 'hm.bot', req: 'hm.request' };
+const DEFAULT_REQUEST = '이 회의 내용에서 할 일을 담당·기한과 함께 짧게 뽑고, 결정·막힌 점과 오늘 먼저 할 일을 짚어 줘.';
+const LS = { draft: 'hm.draft', hist: 'hm.history', bot: 'hm.bot', req: 'hm.request.v2',
+  token: 'hm.token', chat: 'hm.chat', auto: 'hm.auto', refine: 'hm.refine' };
+const TAG = '#할일먼저'; // PC 봇이 이 표시가 붙은 고정(핀) 메시지만 처리한다
+
+// ---------- 텔레그램 봇 직접 호출 (토큰은 이 아이폰 저장소에만) ----------
+const tgReady = () => !!($('token').value.trim() && $('chatId').value.trim());
+async function tg(method, body) {
+  const url = `https://api.telegram.org/bot${$('token').value.trim()}/${method}`;
+  const opt = body instanceof FormData ? { method: 'POST', body }
+    : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) };
+  const r = await fetch(url, opt);
+  const j = await r.json().catch(() => ({ ok: false, description: `HTTP ${r.status}` }));
+  if (!j.ok) throw new Error(j.description || '텔레그램 오류');
+  return j.result;
+}
+function caption(kind, extra = {}) {
+  const lines = [`${TAG} ${kind}`, `제목: ${$('title').value.trim() || '회의'}`, `날짜: ${$('date').value || today()}`];
+  for (const [k, v] of Object.entries(extra)) if (v) lines.push(`${k}: ${v}`);
+  const req = $('request').value.trim();
+  if (req) lines.push(`부탁: ${req}`);
+  return lines.join('\n').slice(0, 1000);
+}
+/// 파일을 봇 대화방에 올리고 고정(핀)한다 → PC 봇이 고정된 것을 찾아 처리하고 고정을 푼다.
+async function uploadAndPin(blob, filename, cap) {
+  const fd = new FormData();
+  fd.append('chat_id', $('chatId').value.trim());
+  fd.append('document', blob, filename);
+  fd.append('caption', cap);
+  fd.append('disable_notification', 'true');
+  const m = await tg('sendDocument', fd);
+  await tg('pinChatMessage', { chat_id: $('chatId').value.trim(), message_id: m.message_id, disable_notification: true });
+  return m;
+}
+function updateLinkState() { $('linkState').textContent = tgReady() ? '· 연결됨' : '· 연결 안 됨'; }
+
+// ---------- 녹음 보관(IndexedDB): 못 보낸 녹음을 잃지 않게 ----------
+function idb() {
+  return new Promise((ok, no) => {
+    const r = indexedDB.open('halil', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('pending');
+    r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error);
+  });
+}
+async function idbDo(mode, fn) {
+  const db = await idb();
+  return new Promise((ok, no) => {
+    const tx = db.transaction('pending', mode); const st = tx.objectStore('pending');
+    const req = fn(st); tx.oncomplete = () => ok(req && req.result); tx.onerror = () => no(tx.error);
+  });
+}
+const pendingPut = (v) => idbDo('readwrite', (s) => s.put(v, 'last'));
+const pendingGet = () => idbDo('readonly', (s) => s.get('last'));
+const pendingDel = () => idbDo('readwrite', (s) => s.delete('last'));
+
+// ---------- ① 녹음만 하기 ----------
+let mr = null, recChunks = [], recStream = null, recT0 = 0, recTimer = null, wake = null;
+function pickMime() {
+  const c = ['audio/mp4;codecs=mp4a.40.2', 'audio/mp4', 'audio/aac', 'audio/webm;codecs=opus', 'audio/webm'];
+  return c.find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || '';
+}
+async function startAudio() {
+  if (!tgReady()) { toast('먼저 설정에서 봇 토큰과 대화방 번호를 넣어 주세요.', 3500); $('settings').open = true; return; }
+  if (listening) stopListening();
+  try {
+    recStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: true, autoGainControl: true } });
+  } catch (e) { toast('마이크를 쓸 수 없어요: ' + e.message, 4000); return; }
+  const mime = pickMime();
+  // 40kbps: 말소리에 충분하고, 봇 한도 20MB 안에 약 60분까지 들어간다
+  mr = new MediaRecorder(recStream, mime ? { mimeType: mime, audioBitsPerSecond: 40000 } : undefined);
+  recChunks = [];
+  mr.ondataavailable = (e) => { if (e.data && e.data.size) recChunks.push(e.data); };
+  mr.onstop = finishAudio;
+  mr.start(1000);
+  recT0 = Date.now();
+  try { wake = await navigator.wakeLock.request('screen'); } catch (_) {}
+  $('audioBtn').textContent = '⏹ 녹음 끝내고 PC로 보내기'; $('audioBtn').classList.add('on');
+  $('audioStatus').textContent = '녹음 중… 화면을 켜 둔 채로 두세요(꺼지면 녹음이 멈춰요).';
+  recTimer = setInterval(() => {
+    const s = Math.floor((Date.now() - recT0) / 1000);
+    $('audioTime').textContent = `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+  }, 500);
+}
+function stopAudio() { if (mr && mr.state !== 'inactive') mr.stop(); }
+async function finishAudio() {
+  clearInterval(recTimer);
+  try { recStream.getTracks().forEach((t) => t.stop()); } catch (_) {}
+  try { wake && wake.release(); } catch (_) {}
+  $('audioBtn').textContent = '🔴 녹음 시작'; $('audioBtn').classList.remove('on');
+  const type = (mr && mr.mimeType) || 'audio/mp4';
+  const blob = new Blob(recChunks, { type });
+  const ext = type.includes('webm') ? 'webm' : 'm4a';
+  const secs = Math.round((Date.now() - recT0) / 1000);
+  const item = { blob, name: `회의_${$('date').value || today()}_${Date.now()}.${ext}`,
+    cap: caption('audio', { '화자 수': $('speakers').value.trim(), '길이(초)': String(secs) }), secs };
+  try { await pendingPut(item); } catch (_) {}
+  await sendAudio(item);
+}
+async function sendAudio(item) {
+  const mb = (item.blob.size / 1048576).toFixed(1);
+  if (item.blob.size > 19.5 * 1048576) {
+    $('audioStatus').textContent = `녹음이 ${mb}MB라 너무 커요(봇은 20MB까지). 회의를 나눠 녹음해 주세요.`;
+    return;
+  }
+  $('audioStatus').textContent = `PC로 보내는 중… (${mb}MB)`;
+  try {
+    await uploadAndPin(item.blob, item.name, item.cap);
+    await pendingDel().catch(() => {});
+    $('retryBtn').classList.add('hidden');
+    $('audioStatus').textContent = `보냈어요 (${mb}MB). PC가 전사·화자 구분 후 텔레그램으로 할 일을 보내 드려요. 녹음 1분에 1~2분쯤 걸려요.`;
+    toast('녹음을 PC로 보냈어요.');
+  } catch (e) {
+    $('audioStatus').textContent = '보내기 실패: ' + e.message + ' — 녹음은 이 아이폰에 보관했어요.';
+    $('retryBtn').classList.remove('hidden');
+  }
+}
+
+// ---------- ② 할 일 목록 자동 보내기 ----------
+async function autoSend() {
+  if (!tgReady()) return false;
+  const list = callCore('format_message', {
+    title: $('title').value, date: $('date').value,
+    todos: readList('todos'), decisions: readList('decisions'), blockers: readList('blockers'), request: '',
+  });
+  await tg('sendMessage', { chat_id: $('chatId').value.trim(), text: list.replace('[회의 할 일]', '[할일먼저 · 아이폰 정리]') });
+  if ($('refine').checked && $('text').value.trim()) {
+    const blob = new Blob([$('text').value.trim()], { type: 'text/plain' });
+    await uploadAndPin(blob, `회의내용_${$('date').value || today()}.txt`, caption('text'));
+    return 'refine';
+  }
+  return true;
+}
 
 // ---------- Rust(WebAssembly) 연결 ----------
 let core = null;
@@ -59,7 +189,7 @@ function setupSpeech() {
       if (r.isFinal) {
         const ta = $('text');
         const add = r[0].transcript.trim();
-        if (add) ta.value = (ta.value.trim() ? ta.value.trim() + '\n' : '') + add;
+        if (add) ta.value = (ta.value.trim() ? ta.value.trim() + ' ' : '') + add; // 줄바꿈 대신 띄어쓰기(문장 나누기는 Rust가)
         ta.scrollTop = ta.scrollHeight;
         saveDraft();
       } else interim += r[0].transcript;
@@ -147,7 +277,13 @@ function analyze() {
   refresh();
   saveHistory(a);
   $('result').scrollIntoView({ behavior: 'smooth' });
-  toast(`문장 ${a.sentence_count}개 중 할 일 ${a.todos.length}개를 찾았어요.`);
+  if ($('autoSend').checked && tgReady()) {
+    autoSend()
+      .then((r) => toast(r === 'refine' ? `할 일 ${a.todos.length}개를 봇이 보냈어요. PC Claude 정리본이 곧 와요.` : `할 일 ${a.todos.length}개를 봇이 보냈어요.`, 3500))
+      .catch((e) => toast('봇 보내기 실패: ' + e.message, 5000));
+  } else {
+    toast(`문장 ${a.sentence_count}개 중 할 일 ${a.todos.length}개를 찾았어요.` + (tgReady() ? '' : ' (설정에서 봇을 연결하면 자동으로 보내요)'), 3500);
+  }
 }
 
 // ---------- 텔레그램으로 보내기 ----------
@@ -163,6 +299,11 @@ function openBot() {
   else location.href = 'tg://';
 }
 async function send() {
+  if (tgReady()) {
+    try { const r = await autoSend(); toast(r === 'refine' ? '봇이 보냈어요. PC Claude 정리본이 곧 와요.' : '봇이 보냈어요.'); }
+    catch (e) { toast('봇 보내기 실패: ' + e.message, 5000); }
+    return;
+  }
   const msg = buildMessage();
   const tooLong = msg.length > 4000; // 텔레그램 한 메시지 한도 4096자
   if (navigator.share) {
@@ -222,9 +363,28 @@ async function main() {
   try { await loadCore(); } catch (e) { toast('앱 핵심(Rust)을 불러오지 못했어요: ' + e, 6000); return; }
   const d = JSON.parse(localStorage.getItem(LS.draft) || '{}');
   $('title').value = d.title || ''; $('date').value = d.date || today(); $('text').value = d.text || '';
-  $('botName').value = localStorage.getItem(LS.bot) || '';
+  $('botName').value = localStorage.getItem(LS.bot) || 'my_claudetyty_bot';
   $('request').value = localStorage.getItem(LS.req) ?? DEFAULT_REQUEST;
-  setupSpeech(); renderHistory();
+  $('token').value = localStorage.getItem(LS.token) || '';
+  $('chatId').value = localStorage.getItem(LS.chat) || '';
+  $('autoSend').checked = localStorage.getItem(LS.auto) !== '0';
+  $('refine').checked = localStorage.getItem(LS.refine) !== '0';
+  setupSpeech(); renderHistory(); updateLinkState();
+  if (!tgReady()) $('settings').open = true;
+
+  $('token').addEventListener('input', () => { localStorage.setItem(LS.token, $('token').value.trim()); updateLinkState(); });
+  $('chatId').addEventListener('input', () => { localStorage.setItem(LS.chat, $('chatId').value.trim()); updateLinkState(); });
+  $('autoSend').addEventListener('change', () => localStorage.setItem(LS.auto, $('autoSend').checked ? '1' : '0'));
+  $('refine').addEventListener('change', () => localStorage.setItem(LS.refine, $('refine').checked ? '1' : '0'));
+  $('testBtn').onclick = async () => {
+    if (!tgReady()) { toast('토큰과 대화방 번호를 먼저 넣어 주세요.'); return; }
+    try { await tg('sendMessage', { chat_id: $('chatId').value.trim(), text: '할일먼저 앱 연결 시험: 잘 연결됐어요 ✅' }); toast('연결됐어요! 텔레그램을 확인해 보세요.'); }
+    catch (e) { toast('연결 실패: ' + e.message, 5000); }
+  };
+  $('audioBtn').onclick = () => (mr && mr.state === 'recording' ? stopAudio() : startAudio());
+  $('retryBtn').onclick = async () => { const it = await pendingGet().catch(() => null); if (it) sendAudio(it); else $('retryBtn').classList.add('hidden'); };
+  pendingGet().then((it) => { if (it) { $('retryBtn').classList.remove('hidden'); $('audioStatus').textContent = '보내지 못한 녹음이 있어요.'; } }).catch(() => {});
+  if (!window.MediaRecorder) { $('audioBtn').disabled = true; $('audioStatus').textContent = '이 브라우저는 녹음을 지원하지 않아요.'; }
 
   $('recBtn').onclick = () => (listening ? stopListening() : startListening());
   $('analyzeBtn').onclick = analyze;

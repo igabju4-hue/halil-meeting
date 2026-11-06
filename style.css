@@ -29,6 +29,11 @@ button:active { transform: scale(.98); }
 .ghost { background: transparent; border: 1px solid var(--line); color: var(--ink); }
 .big { width: 100%; font-size: 20px; padding: 16px; background: var(--green); color: #fff; font-weight: 700; }
 .big.on { background: var(--red); animation: pulse 1.4s infinite; }
+.big.rec2 { background: #b42318; }
+.big.rec2.on { background: #444; }
+.row.small { align-items: center; margin-top: 8px; }
+.row.small input { width: 9em; flex: none; }
+.lbl.inline { margin: 0; flex: 1; }
 @keyframes pulse { 50% { opacity: .75; } }
 .rec { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
 .rec .big { flex: 1; }
